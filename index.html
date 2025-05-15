@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>专业PDF绘图查看器</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #f0f2f5;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            touch-action: none;
+        }
+
+        .container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            width: 90%;
+            max-width: 1200px;
+            margin: 20px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .header {
+            background: #5d5f61;
+            color: white;
+            padding: 20px;
+            border-radius: 15px 15px 0 0;
+            text-align: center;
+        }
+
+        .upload-section {
+            text-align: center;
+            padding: 30px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .custom-upload {
+            background: #6d6d6d;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: none;
+            font-size: 16px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .custom-upload:hover {
+            background: #303030;
+            transform: translateY(-2px);
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .content-viewer {
+            padding: 30px;
+            min-height: 600px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 30px;
+            width: 100%;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        .pdf-page {
+            background: white;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            margin: 20px 0;
+            max-width: 100%;
+            display: block;
+            position: relative;
+        }
+
+        .drawing-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .toolbar {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            display: flex;
+            gap: 10px;
+            z-index: 1000;
+            backdrop-filter: blur(5px);
+        }
+
+        .tool-btn {
+            padding: 8px 12px;
+            border: 1px solid #5d5f61;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: white;
+        }
+
+        .tool-btn.active {
+            background: #5d5f61;
+            color: white;
+        }
+
+        .color-picker {
+            width: 30px;
+            height: 30px;
+            border: none;
+            padding: 0;
+            cursor: pointer;
+        }
+
+        .brush-size {
+            width: 80px;
+            height: 30px;
+        }
+
+        .zoom-controls {
+            position: fixed;
+            bottom: 40px;
+            right: 40px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 12px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            z-index: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>PDF绘图查看器</h1>
+        </div>
+
+        <div class="toolbar">
+            <button class="tool-btn active" data-tool="pen">✎ 画笔</button>
+            <button class="tool-btn" data-tool="eraser">🧹 橡皮擦</button>
+            <button class="tool-btn" data-tool="scroll">☰ 滚动</button>
+            <input type="color" class="color-picker" value="#ff4444">
+            <input type="range" class="brush-size" min="1" max="20" value="3">
+            <button class="tool-btn" onclick="undo()">↩ 撤销</button>
+            <button class="tool-btn" onclick="redo()">↪ 重做</button>
+        </div>
+
+        <div class="upload-section">
+            <button class="custom-upload" onclick="document.getElementById('fileInput').click()">
+                📁 上传PDF文件
+            </button>
+            <input type="file" id="fileInput" accept="application/pdf">
+        </div>
+
+        <div class="status-message" id="status">请选择要查看的PDF文件</div>
+        
+        <div class="content-viewer" id="content"></div>
+        <div class="loading" id="loading">⏳ 加载中...</div>
+    </div>
+
+    <div class="zoom-controls">
+        <button class="tool-btn" onclick="adjustZoom(0.8)">−</button>
+        <span id="zoom-level">100%</span>
+        <button class="tool-btn" onclick="adjustZoom(1.2)">+</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        let currentScale = 1;
+        let originalSizes = new Map();
+        let isRendering = false;
+        
+        // 绘图系统变量
+        let currentTool = 'pen';
+        let isDrawing = false;
+        let currentPath = null;
+        let drawingHistory = [];
+        let historyPointer = -1;
+        let brushColor = '#ff4444';
+        let brushSize = 3;
+        let eraserSize = 10;
+        let currentCanvas = null;
+
+        // PDF渲染功能
+        document.getElementById('fileInput').addEventListener('change', async function(e) {
+            if(isRendering) return;
+            isRendering = true;
+            
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const loading = document.getElementById('loading');
+            const viewer = document.getElementById('content');
+            const status = document.getElementById('status');
+
+            viewer.innerHTML = '';
+            originalSizes.clear();
+            drawingHistory = [];
+            historyPointer = -1;
+            status.textContent = '正在加载PDF...';
+            loading.style.display = 'block';
+
+            try {
+                const arrayBuffer = await readFileAsync(file);
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                
+                status.textContent = `已加载 · 共 ${pdf.numPages} 页`;
+                const baseWidth = viewer.clientWidth - 60;
+
+                for(let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    await renderPage(pdf, pageNum, baseWidth);
+                }
+
+                currentScale = 1;
+                updateZoomDisplay();
+                setupDrawingHandlers();
+            } catch(err) {
+                status.textContent = '错误: ' + err.message;
+                console.error('PDF渲染失败:', err);
+            } finally {
+                loading.style.display = 'none';
+                isRendering = false;
+            }
+        });
+
+        async function renderPage(pdf, pageNum, baseWidth) {
+            const page = await pdf.getPage(pageNum);
+            const viewport = page.getViewport({ scale: 1 });
+            const viewer = document.getElementById('content');
+            
+            const dpr = window.devicePixelRatio || 1;
+            let scale = Math.min(2, (baseWidth / viewport.width) * 1.3);
+            scale *= dpr;
+
+            const scaledViewport = page.getViewport({ scale });
+            
+            // 创建PDF画布
+            const pdfCanvas = document.createElement('canvas');
+            const pdfCtx = pdfCanvas.getContext('2d');
+            
+            pdfCanvas.width = scaledViewport.width;
+            pdfCanvas.height = scaledViewport.height;
+            pdfCanvas.style.width = `${scaledViewport.width / dpr}px`;
+            pdfCanvas.style.height = `${scaledViewport.height / dpr}px`;
+            pdfCanvas.className = 'pdf-page';
+
+            originalSizes.set(pdfCanvas, {
+                width: scaledViewport.width / dpr,
+                height: scaledViewport.height / dpr,
+                ratio: viewport.width / viewport.height
+            });
+
+            // 创建绘图层
+            const drawingCanvas = document.createElement('canvas');
+            drawingCanvas.className = 'drawing-layer';
+            drawingCanvas.width = scaledViewport.width;
+            drawingCanvas.height = scaledViewport.height;
+            drawingCanvas.style.width = pdfCanvas.style.width;
+            drawingCanvas.style.height = pdfCanvas.style.height;
+            
+            const wrapper = document.createElement('div');
+            wrapper.style.position = 'relative';
+            wrapper.appendChild(pdfCanvas);
+            wrapper.appendChild(drawingCanvas);
+            
+            viewer.appendChild(wrapper);
+
+            // 渲染PDF内容
+            pdfCtx.imageSmoothingEnabled = true;
+            pdfCtx.imageSmoothingQuality = 'high';
+            await page.render({
+                canvasContext: pdfCtx,
+                viewport: scaledViewport,
+                intent: 'display'
+            }).promise;
+        }
+
+        // 绘图功能实现
+        function setupDrawingHandlers() {
+            document.querySelectorAll('.pdf-page').forEach(pdfCanvas => {
+                const wrapper = pdfCanvas.parentNode;
+                const drawingCanvas = wrapper.querySelector('.drawing-layer');
+                const ctx = drawingCanvas.getContext('2d');
+                
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                ctx.globalCompositeOperation = 'source-over';
+
+                // 鼠标事件
+                wrapper.addEventListener('mousedown', startDrawing);
+                wrapper.addEventListener('mousemove', draw);
+                wrapper.addEventListener('mouseup', endDrawing);
+                wrapper.addEventListener('mouseleave', endDrawing);
+
+                // 触摸事件
+                wrapper.addEventListener('touchstart', touchStart);
+                wrapper.addEventListener('touchmove', touchMove);
+                wrapper.addEventListener('touchend', endDrawing);
+            });
+        }
+
+        function getCanvasPosition(canvas, clientX, clientY) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            return {
+                x: (clientX - rect.left) * scaleX,
+                y: (clientY - rect.top) * scaleY
+            };
+        }
+
+        // 修改橡皮擦逻辑
+        function startDrawing(e) {
+            const drawingCanvas = e.currentTarget.querySelector('.drawing-layer');
+            const pos = getCanvasPosition(drawingCanvas, 
+                e.clientX || e.touches[0].clientX, 
+                e.clientY || e.touches[0].clientY
+            );
+            
+            isDrawing = true;
+            currentCanvas = drawingCanvas;
+
+            if (currentTool === 'eraser') {
+                // 如果是橡皮擦，查找并删除包含当前位置的路径
+                const ctx = drawingCanvas.getContext('2d');
+                const pathsToRemove = [];
+                drawingHistory.forEach((record, index) => {
+                    if (record.canvas === drawingCanvas && isPointInPath(record.path, pos)) {
+                        pathsToRemove.push(index);
+                    }
+                });
+
+                // 删除路径并重绘
+                pathsToRemove.reverse().forEach(index => drawingHistory.splice(index, 1));
+                redrawAllCanvases();
+                isDrawing = false; // 橡皮擦不需要持续绘制
+                return;
+            }
+
+            // 普通绘图逻辑
+            currentPath = {
+                tool: currentTool,
+                color: brushColor,
+                size: brushSize,
+                points: [pos]
+            };
+
+            const ctx = drawingCanvas.getContext('2d');
+            ctx.beginPath();
+            ctx.moveTo(pos.x, pos.y);
+            ctx.strokeStyle = brushColor;
+            ctx.lineWidth = brushSize;
+            ctx.globalCompositeOperation = 'source-over';
+        }
+
+        function isPointInPath(path, point) {
+            // 判断点是否在路径范围内
+            const threshold = path.size * 2; // 允许的误差范围
+            for (let i = 0; i < path.points.length; i++) {
+                const p = path.points[i];
+                const distance = Math.sqrt((p.x - point.x) ** 2 + (p.y - point.y) ** 2);
+                if (distance <= threshold) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function draw(e) {
+            if (!isDrawing) return;
+            
+            const drawingCanvas = currentCanvas;
+            const pos = getCanvasPosition(drawingCanvas, 
+                e.clientX || e.touches[0].clientX, 
+                e.clientY || e.touches[0].clientY
+            );
+            
+            const ctx = drawingCanvas.getContext('2d');
+            currentPath.points.push(pos);
+            
+            // 贝塞尔曲线平滑处理
+            if(currentPath.points.length > 2) {
+                const controlPoint = currentPath.points[currentPath.points.length-2];
+                ctx.quadraticCurveTo(
+                    controlPoint.x, controlPoint.y,
+                    pos.x, pos.y
+                );
+            } else {
+                ctx.lineTo(pos.x, pos.y);
+            }
+            
+            ctx.stroke();
+        }
+
+        function endDrawing() {
+            if (!isDrawing) return;
+            
+            isDrawing = false;
+            
+            // 保存历史记录
+            drawingHistory = drawingHistory.slice(0, historyPointer + 1);
+            drawingHistory.push({
+                canvas: currentCanvas,
+                path: currentPath
+            });
+            historyPointer++;
+            
+            currentPath = null;
+            currentCanvas = null;
+        }
+
+        // 撤销/重做功能
+        function undo() {
+            if(historyPointer < 0) return;
+            
+            historyPointer--;
+            redrawAllCanvases();
+        }
+
+        function redo() {
+            if(historyPointer >= drawingHistory.length - 1) return;
+            
+            historyPointer++;
+            redrawAllCanvases();
+        }
+
+        function redrawAllCanvases() {
+            document.querySelectorAll('.drawing-layer').forEach(canvas => {
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                drawingHistory.slice(0, historyPointer + 1).forEach(record => {
+                    if(record.canvas === canvas) {
+                        drawPath(ctx, record.path);
+                    }
+                });
+            });
+        }
+
+        function drawPath(ctx, path) {
+            ctx.beginPath();
+            ctx.globalCompositeOperation = path.tool === 'eraser' 
+                ? 'destination-out' 
+                : 'source-over';
+            
+            ctx.strokeStyle = path.color;
+            ctx.lineWidth = path.size;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            path.points.forEach((point, index) => {
+                if(index === 0) {
+                    ctx.moveTo(point.x, point.y);
+                } else if(index > 1) {
+                    const prevPoint = path.points[index-1];
+                    ctx.quadraticCurveTo(
+                        prevPoint.x, prevPoint.y,
+                        point.x, point.y
+                    );
+                }
+            });
+            ctx.stroke();
+        }
+
+        // 工具切换
+        document.querySelectorAll('[data-tool]').forEach(btn => {
+            btn.addEventListener('click', function() {
+                currentTool = this.dataset.tool;
+                document.querySelectorAll('[data-tool]').forEach(b => 
+                    b.classList.remove('active')
+                );
+                this.classList.add('active');
+
+                // 如果是滚动模式，禁用绘图事件
+                if (currentTool === 'scroll') {
+                    document.querySelectorAll('.pdf-page').forEach(canvas => {
+                        const wrapper = canvas.parentNode;
+                        wrapper.style.pointerEvents = 'auto'; // 启用滚动
+                    });
+                    document.querySelectorAll('.drawing-layer').forEach(layer => {
+                        layer.style.pointerEvents = 'none'; // 禁用绘图
+                    });
+                } else {
+                    document.querySelectorAll('.pdf-page').forEach(canvas => {
+                        const wrapper = canvas.parentNode;
+                        wrapper.style.pointerEvents = 'none'; // 禁用滚动
+                    });
+                    document.querySelectorAll('.drawing-layer').forEach(layer => {
+                        layer.style.pointerEvents = 'auto'; // 启用绘图
+                    });
+                }
+            });
+        });
+
+        // 颜色和尺寸选择
+        document.querySelector('.color-picker').addEventListener('input', function(e) {
+            brushColor = e.target.value;
+        });
+
+        document.querySelector('.brush-size').addEventListener('input', function(e) {
+            brushSize = parseInt(e.target.value);
+        });
+
+        // 缩放功能
+        function adjustZoom(factor) {
+            currentScale = Math.max(0.5, Math.min(currentScale * factor, 3));
+            document.querySelectorAll('.pdf-page').forEach(canvas => {
+                const original = originalSizes.get(canvas);
+                if(original) {
+                    canvas.style.width = `${original.width * currentScale}px`;
+                    canvas.style.height = `${original.height * currentScale}px`;
+                }
+            });
+            document.querySelectorAll('.drawing-layer').forEach(layer => {
+                layer.style.width = layer.previousElementSibling.style.width;
+                layer.style.height = layer.previousElementSibling.style.height;
+            });
+            updateZoomDisplay();
+        }
+
+        function updateZoomDisplay() {
+            document.getElementById('zoom-level').textContent = `${Math.round(currentScale * 100)}%`;
+        }
+
+        // 辅助函数
+        function readFileAsync(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        // 触摸事件处理
+        function touchStart(e) {
+            e.preventDefault();
+            startDrawing(e);
+        }
+
+        function touchMove(e) {
+            e.preventDefault();
+            draw(e);
+        }
+
+        // 保存PDF功能
+        async function savePDF() {
+            const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array() }).promise;
+            const pdfPages = document.querySelectorAll('.pdf-page');
+            const pdfAnnotations = document.querySelectorAll('.drawing-layer');
+
+            const pdfCanvas = document.createElement('canvas');
+            const pdfCtx = pdfCanvas.getContext('2d');
+
+            const pdfWriter = new PDFLib.PDFDocument();
+
+            for (let i = 0; i < pdfPages.length; i++) {
+                const pageCanvas = pdfPages[i];
+                const annotationCanvas = pdfAnnotations[i];
+
+                // 合并PDF页面和批注
+                pdfCanvas.width = pageCanvas.width;
+                pdfCanvas.height = pageCanvas.height;
+                pdfCtx.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
+                pdfCtx.drawImage(pageCanvas, 0, 0);
+                pdfCtx.drawImage(annotationCanvas, 0, 0);
+
+                const pdfImage = pdfCanvas.toDataURL('image/png');
+                const pdfPage = await pdfWriter.addPage([pageCanvas.width, pageCanvas.height]);
+                const pdfImageEmbed = await pdfWriter.embedPng(pdfImage);
+                pdfPage.drawImage(pdfImageEmbed, {
+                    x: 0,
+                    y: 0,
+                    width: pageCanvas.width,
+                    height: pageCanvas.height,
+                });
+            }
+
+            const pdfBytes = await pdfWriter.save();
+            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'annotated.pdf';
+            link.click();
+        }
+
+        // 拖拽上传
+        document.addEventListener('dragover', e => e.preventDefault());
+        document.addEventListener('drop', e => {
+            e.preventDefault();
+            if(e.dataTransfer.files.length) {
+                document.getElementById('fileInput').files = e.dataTransfer.files;
+                document.getElementById('fileInput').dispatchEvent(new Event('change'));
+            }
+        });
+    </script>
+</body>
+</html>
