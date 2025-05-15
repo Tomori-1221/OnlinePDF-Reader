@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>专业PDF绘图查看器</title>
+    <title>Online PDF Reader</title>
     <style>
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
@@ -154,7 +154,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>PDF绘图查看器</h1>
+            <h1>Online PDF Reader</h1>
         </div>
 
         <div class="toolbar">
@@ -169,7 +169,7 @@
 
         <div class="upload-section">
             <button class="custom-upload" onclick="document.getElementById('fileInput').click()">
-                📁 上传PDF文件
+                📁 Upload a PDF-File
             </button>
             <input type="file" id="fileInput" accept="application/pdf">
         </div>
@@ -219,7 +219,7 @@
             originalSizes.clear();
             drawingHistory = [];
             historyPointer = -1;
-            status.textContent = '正在加载PDF...';
+            status.textContent = 'Loading...';
             loading.style.display = 'block';
 
             try {
